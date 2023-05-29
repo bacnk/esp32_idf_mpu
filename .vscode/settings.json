@@ -1,0 +1,26 @@
+{
+    "C_Cpp.intelliSenseEngine": "Tag Parser",
+    "idf.adapterTargetName": "esp32",
+    "idf.customExtraPaths": "d:\\Bacnk_2023\\LIB_esp32\\tool\\tools\\xtensa-esp32-elf\\esp-2021r2-patch3-8.4.0\\xtensa-esp32-elf\\bin;d:\\Bacnk_2023\\LIB_esp32\\tool\\tools\\xtensa-esp32s2-elf\\esp-2021r2-patch3-8.4.0\\xtensa-esp32s2-elf\\bin;d:\\Bacnk_2023\\LIB_esp32\\tool\\tools\\xtensa-esp32s3-elf\\esp-2021r2-patch3-8.4.0\\xtensa-esp32s3-elf\\bin;d:\\Bacnk_2023\\LIB_esp32\\tool\\tools\\riscv32-esp-elf\\esp-2021r2-patch3-8.4.0\\riscv32-esp-elf\\bin;d:\\Bacnk_2023\\LIB_esp32\\tool\\tools\\esp32ulp-elf\\2.28.51-esp-20191205\\esp32ulp-elf-binutils\\bin;d:\\Bacnk_2023\\LIB_esp32\\tool\\tools\\esp32s2ulp-elf\\2.28.51-esp-20191205\\esp32s2ulp-elf-binutils\\bin;d:\\Bacnk_2023\\LIB_esp32\\tool\\tools\\cmake\\3.16.4\\bin;d:\\Bacnk_2023\\LIB_esp32\\tool\\tools\\openocd-esp32\\v0.11.0-esp32-20220706\\openocd-esp32\\bin;d:\\Bacnk_2023\\LIB_esp32\\tool\\tools\\ninja\\1.10.2;d:\\Bacnk_2023\\LIB_esp32\\tool\\tools\\idf-exe\\1.0.1;d:\\Bacnk_2023\\LIB_esp32\\tool\\tools\\ccache\\3.7;d:\\Bacnk_2023\\LIB_esp32\\tool\\tools\\dfu-util\\0.9\\dfu-util-0.9-win64",
+    "idf.customExtraVars": {
+        "OPENOCD_SCRIPTS": "d:\\Bacnk_2023\\LIB_esp32\\tool\\tools\\openocd-esp32\\v0.11.0-esp32-20220706/openocd-esp32/share/openocd/scripts",
+        "IDF_CCACHE_ENABLE": "1"
+    },
+    "idf.espIdfPathWin": "d:\\Bacnk_2023\\LIB_esp32\\esp-idf",
+    "idf.openOcdConfigs": [
+        "board/esp32-wrover-kit-3.3v.cfg"
+    ],
+    "idf.portWin": "COM8",
+    "idf.pythonBinPathWin": "d:\\Bacnk_2023\\LIB_esp32\\tool\\python_env\\idf4.3_py3.8_env\\Scripts\\python.exe",
+    "idf.toolsPathWin": "d:\\Bacnk_2023\\LIB_esp32\\tool",
+    "ros.distro": "foxy",
+    "files.associations": {
+        "array": "c",
+        "string": "c",
+        "string_view": "c",
+        "*.inc": "c",
+        "nvs_flash.h": "c",
+        "stdio.h": "c",
+        "*.ipp": "c"
+    }
+}
