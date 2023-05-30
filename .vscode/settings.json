@@ -21,6 +21,10 @@
         "*.inc": "c",
         "nvs_flash.h": "c",
         "stdio.h": "c",
-        "*.ipp": "c"
+        "*.ipp": "c",
+        "esp_system.h": "c",
+        "esp_http_client.h": "c",
+        "kalmanfilter.h": "c",
+        "connect_wifi.h": "c"
     }
 }
