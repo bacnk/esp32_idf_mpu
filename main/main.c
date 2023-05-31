@@ -11,29 +11,27 @@
 #include "esp_system.h"
 #include <cJSON.h>
 #include "connect_wifi.h"
+
 static const char *TAG = "MPU_6050";
 static const char *TAG1 = "HTTP_POST";
-#define I2C_MASTER_SCL_IO 22 /*!< gpio number for I2C master clock */
+
+#define I2C_MASTER_SCL_IO 22
 #define I2C_MASTER_SDA_IO 21
-#define I2C_MASTER_NUM I2C_NUM_0    /*!< gpio number for I2C master data  */
-#define I2C_MASTER_FREQ_HZ 100000   /*!< I2C master clock frequency */
-#define I2C_MASTER_TX_BUF_DISABLE 0 /*!< I2C master doesn't need buffer */
-#define I2C_MASTER_RX_BUF_DISABLE 0 /*!< I2C master doesn't need buffer */
-
-#define WRITE_BIT I2C_MASTER_WRITE /*!< I2C master write */
-#define READ_BIT I2C_MASTER_READ   /*!< I2C master read */
-#define ACK_CHECK_EN 0x1           /*!< I2C master will check ack from slave*/
-#define ACK_CHECK_DIS 0x0          /*!< I2C master will not check ack from slave */
-#define ACK_VAL 0x0                /*!< I2C ack value */
-#define NACK_VAL 0x1               /*!< I2C nack value */
-
-/*MPU6050 register addresses */
+#define I2C_MASTER_NUM I2C_NUM_0
+#define I2C_MASTER_FREQ_HZ 100000
+#define I2C_MASTER_TX_BUF_DISABLE 0
+#define I2C_MASTER_RX_BUF_DISABLE 0
+#define WRITE_BIT I2C_MASTER_WRITE
+#define READ_BIT I2C_MASTER_READ
+#define ACK_CHECK_EN 0x1
+#define ACK_CHECK_DIS 0x0
+#define ACK_VAL 0x0
+#define NACK_VAL 0x1
 
 #define MPU6050_REG_POWER 0x6B
 #define MPU6050_REG_ACCEL_CONFIG 0x1C
 #define MPU6050_REG_GYRO_CONFIG 0x1B
 
-/*These are the addresses of mpu6050 from which you will fetch accelerometer x,y,z high and low values */
 #define MPU6050_REG_ACC_X_HIGH 0x3B
 #define MPU6050_REG_ACC_X_LOW 0x3C
 #define MPU6050_REG_ACC_Y_HIGH 0x3D
@@ -41,8 +39,7 @@ static const char *TAG1 = "HTTP_POST";
 #define MPU6050_REG_ACC_Z_HIGH 0x3F
 #define MPU6050_REG_ACC_Z_LOW 0x40
 
-/*These are the addresses of mpu6050 from which you will fetch gyro x,y,z high and low values */
-
+#define MPU6050_TEMP_OUT_H 0X41
 #define MPU6050_REG_GYRO_X_HIGH 0x43
 #define MPU6050_REG_GYRO_X_LOW 0x44
 #define MPU6050_REG_GYRO_Y_HIGH 0x45
@@ -50,23 +47,18 @@ static const char *TAG1 = "HTTP_POST";
 #define MPU6050_REG_GYRO_Z_HIGH 0x47
 #define MPU6050_REG_GYRO_Z_LOW 0x48
 
-/*MPU6050 address and who am i register*/
-
 #define MPU6050_SLAVE_ADDR 0x68
 #define who_am_i 0x75
-uint8_t buffer[14];
-KalmanFilter_t kalmanFilterAccelX;
-KalmanFilter_t kalmanFilterAccelY;
-KalmanFilter_t kalmanFilterAccelZ;
-KalmanFilter_t kalmanFilterGyroX;
-KalmanFilter_t kalmanFilterGyroY;
-KalmanFilter_t kalmanFilterGyroZ;
-float filteredAccelX;
-float filteredAccelY;
-float filteredAccelZ;
-float filteredGyroX;
-float filteredGyroY;
-float filteredGyroZ;
+#define ESP_CONFIG_TCP_SERVER CONFIG_SERVER_IP
+#define ESP_CONFIG_TCP_PORT CONFIG_SERVER_PORT
+static uint8_t buffer[14];
+static KalmanFilter_t kalmanFilterAccelX;
+static KalmanFilter_t kalmanFilterAccelY;
+static KalmanFilter_t kalmanFilterAccelZ;
+static KalmanFilter_t kalmanFilterGyroX;
+static KalmanFilter_t kalmanFilterGyroY;
+static KalmanFilter_t kalmanFilterGyroZ;
+
 static esp_err_t i2c_master_init(void)
 {
     i2c_config_t conf = {
@@ -89,14 +81,14 @@ static esp_err_t mpu_wake(void)
     i2c_master_start(cmd);
     i2c_master_write_byte(cmd, MPU6050_SLAVE_ADDR << 1 | WRITE_BIT, ACK_CHECK_EN);
     i2c_master_write_byte(cmd, MPU6050_REG_POWER, ACK_CHECK_EN);
-    i2c_master_write_byte(cmd, 0x00, ACK_CHECK_EN);
+    i2c_master_write_byte(cmd, 0, ACK_CHECK_EN);
     i2c_master_stop(cmd);
-    ret = i2c_master_cmd_begin(I2C_NUM_0, cmd, 1000 / portTICK_RATE_MS);
+    ret = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, 1000 / portTICK_RATE_MS);
     i2c_cmd_link_delete(cmd);
     return ret;
 }
 
-static esp_err_t i2c_master_sensor_test(uint8_t length, uint8_t *data, uint16_t timeout)
+static esp_err_t mpu_read_accel(uint16_t *accel_x, uint16_t *accel_y, uint16_t *accel_z)
 {
     int ret;
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
@@ -104,172 +96,110 @@ static esp_err_t i2c_master_sensor_test(uint8_t length, uint8_t *data, uint16_t 
     i2c_master_write_byte(cmd, MPU6050_SLAVE_ADDR << 1 | WRITE_BIT, ACK_CHECK_EN);
     i2c_master_write_byte(cmd, MPU6050_REG_ACC_X_HIGH, ACK_CHECK_EN);
     i2c_master_stop(cmd);
-    i2c_master_cmd_begin(I2C_NUM_0, cmd, 1000 / portTICK_RATE_MS);
-    i2c_cmd_link_delete(cmd);
-    vTaskDelay(30 / portTICK_RATE_MS);
+    ret = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, 1000 / portTICK_RATE_MS);
+    if (ret != ESP_OK)
+    {
+        return ret;
+    }
     cmd = i2c_cmd_link_create();
     i2c_master_start(cmd);
     i2c_master_write_byte(cmd, MPU6050_SLAVE_ADDR << 1 | READ_BIT, ACK_CHECK_EN);
-    i2c_master_read(cmd, data, length - 1, ACK_VAL);
-    i2c_master_read(cmd, data, 1, NACK_VAL);
+    i2c_master_read_byte(cmd, (uint8_t *)accel_x, ACK_VAL);
+    i2c_master_read_byte(cmd, ((uint8_t *)accel_x) + 1, ACK_VAL);
+    i2c_master_read_byte(cmd, (uint8_t *)accel_y, ACK_VAL);
+    i2c_master_read_byte(cmd, ((uint8_t *)accel_y) + 1, ACK_VAL);
+    i2c_master_read_byte(cmd, (uint8_t *)accel_z, ACK_VAL);
+    i2c_master_read_byte(cmd, ((uint8_t *)accel_z) + 1, NACK_VAL);
     i2c_master_stop(cmd);
-    ret = i2c_master_cmd_begin(I2C_NUM_0, cmd, 1000 / portTICK_RATE_MS);
+    ret = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, 1000 / portTICK_RATE_MS);
     i2c_cmd_link_delete(cmd);
     return ret;
 }
-float convertAccel(int16_t accelValue)
-{
-    // Áp dụng công thức chuyển đổi từ giá trị đọc sang tọa độ gia tốc
-    float accel = accelValue / 16384.0; // Ví dụ: Tỷ lệ chuyển đổi cho accelerometer
 
-    return accel;
-}
-float convertGyro(int16_t gyroValue)
-{
-    // Áp dụng công thức chuyển đổi từ giá trị đọc sang tọa độ gióc
-    float gyro = gyroValue / 131.0; // Ví dụ: Tỷ lệ chuyển đổi cho gyroscope
-
-    return gyro;
-}
-float convertTemperature(int16_t tempValue)
-{
-    // Áp dụng công thức chuyển đổi từ giá trị đọc sang nhiệt độ
-    float temperature = (tempValue / 340.0) + 36.53; // Ví dụ: Công thức chuyển đổi cho MPU6050
-
-    return temperature;
-}
-static void disp_buf(uint8_t *buf, int len)
-{
-    int i;
-    uint16_t pbuffer[7];
-    pbuffer[0] = (int16_t)((buf[0] << 8) | buf[1]);
-    float accelX = convertAccel(pbuffer[0]);
-    pbuffer[1] = (int16_t)((buf[2] << 8) | buf[3]);
-    float accelY = convertAccel(pbuffer[1]);
-    pbuffer[2] = (int16_t)((buf[4] << 8) | buf[5]);
-    float accelZ = convertAccel(pbuffer[2]);
-    pbuffer[3] = (int16_t)((buf[6] << 8) | buf[7]);
-    float temperature = convertTemperature(pbuffer[3]);
-
-    pbuffer[4] = (int16_t)((buf[8] << 8) | buf[9]);
-    float gyroX = convertGyro(pbuffer[4]);
-    pbuffer[5] = (int16_t)((buf[10] << 8) | buf[11]);
-    float gyroY = convertGyro(pbuffer[5]);
-    pbuffer[6] = (int16_t)((buf[12] << 8) | buf[13]);
-    float gyroZ = convertGyro(pbuffer[6]);
-    filteredAccelX = kalmanFilterUpdate(&kalmanFilterAccelX, accelX);
-    filteredAccelY = kalmanFilterUpdate(&kalmanFilterAccelY, accelY);
-    filteredAccelZ = kalmanFilterUpdate(&kalmanFilterAccelZ, accelZ);
-
-    // Apply Kalman filter to gyroscope data
-    filteredGyroX = kalmanFilterUpdate(&kalmanFilterGyroX, gyroX);
-    filteredGyroY = kalmanFilterUpdate(&kalmanFilterGyroY, gyroY);
-    filteredGyroZ = kalmanFilterUpdate(&kalmanFilterGyroZ, gyroZ);
-    // In ra giá trị đã lọc bằng bộ lọc Kalman
-
-    ESP_LOGI(TAG, "Accelerometer:  X=%.2f  m/s^2  Y=%.2f m/s^2 Z=%.2f m/s^2\n", accelX, accelY, accelZ);
-    ESP_LOGI(TAG, "Temperature: %.2f\n", temperature);
-    ESP_LOGI(TAG, "Gyroscope:  X=%.2f radians/s  Y=%.2f  radians/s Z=%.2f radians/s\n", gyroX, gyroY, gyroZ);
-    ESP_LOGI(TAG, "Filtered Accelerometer:  X=%.2f Y=%.2f Z=%.2f\n", filteredAccelX, filteredAccelY, filteredAccelZ);
-    ESP_LOGI(TAG, "Filtered Gyroscope:  X=%.2f Y=%.2f Z=%.2f\n", filteredGyroX, filteredGyroY, filteredGyroZ);
-}
-
-void send_data_to_nodejs(float filteredAccelX, float filteredAccelY, float filteredAccelZ, float filteredGyroX, float filteredGyroY, float filteredGyroZ)
-{
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddNumberToObject(root, "filteredAccelX", filteredAccelX);
-    cJSON_AddNumberToObject(root, "filteredAccelY", filteredAccelY);
-    cJSON_AddNumberToObject(root, "filteredAccelZ", filteredAccelZ);
-    cJSON_AddNumberToObject(root, "filteredGyroX", filteredGyroX);
-    cJSON_AddNumberToObject(root, "filteredGyroY", filteredGyroY);
-    cJSON_AddNumberToObject(root, "filteredGyroZ", filteredGyroZ);
-    char *json_data = cJSON_Print(root);
-    int sockfd;
-    struct sockaddr_in dest_addr;
-    struct hostent *he;
-    int numbytes;
-
-    // Create socket
-    if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) == -1)
-    {
-        perror("socket");
-        return;
-    }
-
-    // Set server information
-    dest_addr.sin_family = AF_INET;
-    dest_addr.sin_port = htons(8080);  // Change to the appropriate port number
-    he = gethostbyname("10.10.18.65"); // Change to the server hostname or IP address
-    dest_addr.sin_addr = *((struct in_addr *)he->h_addr);
-    memset(&(dest_addr.sin_zero), '\0', 8);
-
-    // Connect to server
-    if (connect(sockfd, (struct sockaddr *)&dest_addr, sizeof(struct sockaddr)) == -1)
-    {
-        ESP_LOGD("connect");
-        return;
-    }
-
-    // Send data
-    if ((numbytes = send(sockfd, json_data, strlen(json_data), 0)) == -1)
-    {
-        perror("send");
-        return;
-    }
-
-    printf("Sent %d bytes to server\n", numbytes);
-
-    // Close socket
-    close(sockfd);
-
-    cJSON_Delete(root);
-    free(json_data);
-}
-
-static void i2c_task(void *arg)
+static esp_err_t mpu_read_gyro(uint16_t *gyro_x, uint16_t *gyro_y, uint16_t *gyro_z)
 {
     int ret;
-
-    while (1)
+    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, MPU6050_SLAVE_ADDR << 1 | WRITE_BIT, ACK_CHECK_EN);
+    i2c_master_write_byte(cmd, MPU6050_REG_GYRO_X_HIGH, ACK_CHECK_EN);
+    i2c_master_stop(cmd);
+    ret = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, 1000 / portTICK_RATE_MS);
+    if (ret != ESP_OK)
     {
-        ret = i2c_master_sensor_test(14, &buffer[0], 0);
-        if (ret == ESP_ERR_TIMEOUT)
-        {
-            printf("\n I2C Timeout");
-        }
-        else if (ret == ESP_OK)
-        {
-            printf("*******************\n");
-            printf("TASK: MASTER READ SENSOR( MPU6050 )\n");
-            printf("*******************\n");
-        }
-        else
-        {
-            printf("\n No ack, sensor not connected...skip...");
-        }
-        vTaskDelay(500 / portTICK_RATE_MS);
-        disp_buf(&buffer[0], 14);
-        send_data_to_nodejs(filteredAccelX, filteredAccelY, filteredAccelZ, filteredGyroX, filteredGyroY, filteredGyroZ);
-        //  vTaskDelay(30 / portTICK_RATE_MS);
+        return ret;
     }
-    vTaskDelete(NULL);
+    cmd = i2c_cmd_link_create();
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, MPU6050_SLAVE_ADDR << 1 | READ_BIT, ACK_CHECK_EN);
+    i2c_master_read_byte(cmd, (uint8_t *)gyro_x, ACK_VAL);
+    i2c_master_read_byte(cmd, ((uint8_t *)gyro_x) + 1, ACK_VAL);
+    i2c_master_read_byte(cmd, (uint8_t *)gyro_y, ACK_VAL);
+    i2c_master_read_byte(cmd, ((uint8_t *)gyro_y) + 1, ACK_VAL);
+    i2c_master_read_byte(cmd, (uint8_t *)gyro_z, ACK_VAL);
+    i2c_master_read_byte(cmd, ((uint8_t *)gyro_z) + 1, NACK_VAL);
+    i2c_master_stop(cmd);
+    ret = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, 1000 / portTICK_RATE_MS);
+    i2c_cmd_link_delete(cmd);
+    return ret;
+}
+static esp_err_t mpu_read_temperature(float *temperature)
+{
+    esp_err_t ret;
+
+    uint8_t temp_data[2];
+    int16_t raw_temperature;
+    // Gửi lệnh để đọc dữ liệu nhiệt độ từ MPU6050
+    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, MPU6050_SLAVE_ADDR << 1 | WRITE_BIT, ACK_CHECK_EN);
+    i2c_master_write_byte(cmd, MPU6050_TEMP_OUT_H, ACK_CHECK_EN);
+    i2c_master_stop(cmd);
+    ret = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, 1000 / portTICK_RATE_MS);
+    if (ret != ESP_OK)
+    {
+        i2c_cmd_link_delete(cmd);
+        return ret;
+    }
+
+    // Đọc dữ liệu nhiệt độ từ MPU6050
+    cmd = i2c_cmd_link_create();
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, MPU6050_SLAVE_ADDR << 1 | READ_BIT, ACK_CHECK_EN);
+    i2c_master_read_byte(cmd, temp_data, ACK_VAL);
+    i2c_master_read_byte(cmd, temperature + 1, ACK_VAL);
+    i2c_master_stop(cmd);
+    ret = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, 1000 / portTICK_RATE_MS);
+    i2c_cmd_link_delete(cmd);
+    if (ret != ESP_OK)
+    {
+        return ret;
+    }
+
+    // Chuyển đổi dữ liệu nhiệt độ sang giá trị số nguyên
+
+    raw_temperature = (int16_t)((temp_data[0] << 8) | temp_data[1]);
+
+    // Apply the temperature conversion formula
+    *temperature = (float)raw_temperature / 340.0 + 36.53;
+    return ESP_OK;
 }
 
-void app_main(void)
+static esp_err_t init_mpu6050(void)
 {
-    esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
+    ESP_LOGI(TAG, "Initializing MPU6050");
+
+    if (i2c_master_init() != ESP_OK)
     {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ret = nvs_flash_init();
+        ESP_LOGE(TAG, "Failed to initialize I2C");
+        return ESP_FAIL;
     }
-    ESP_ERROR_CHECK(ret);
-    ESP_ERROR_CHECK(i2c_master_init());
-    ESP_ERROR_CHECK(mpu_wake());
-    connect_wifi();
-    // Khởi tạo bộ lọc Kalman cho tọa độ gia tốc X
-    // Khởi tạo bộ lọc Kalman cho tọa độ gia tốc X
-    // Khởi tạo bộ lọc Kalman cho tọa độ gia tốc X
+
+    if (mpu_wake() != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Failed to wake MPU6050");
+        return ESP_FAIL;
+    }
 
     kalmanFilterInit(&kalmanFilterAccelX, 1, 1);
     kalmanFilterInit(&kalmanFilterAccelY, 1, 1);
@@ -278,5 +208,71 @@ void app_main(void)
     kalmanFilterInit(&kalmanFilterGyroY, 1, 1);
     kalmanFilterInit(&kalmanFilterGyroZ, 1, 1);
 
-    xTaskCreate(i2c_task, "i2c_test_task", 1024 * 2, NULL, 10, NULL);
+    return ESP_OK;
+}
+float convertAccel(int16_t accelValue)
+{
+    // Áp dụng công thức chuyển đổi từ giá trị đọc sang tọa độ gia tốc
+    float accel = accelValue / 16384.0; // Tỷ lệ chuyển đổi cho accelerometer
+
+    return accel;
+}
+
+float convertGyro(int16_t gyroValue)
+{
+    // Áp dụng công thức chuyển đổi từ giá trị đọc sang tọa độ gióc
+    float gyro = gyroValue / 131.0; // Tỷ lệ chuyển đổi cho gyroscope
+
+    return gyro;
+}
+
+void app_main()
+{
+    ESP_ERROR_CHECK(nvs_flash_init());
+    connect_wifi();
+    if (init_mpu6050() != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Failed to initialize MPU6050");
+        return;
+    }
+
+    uint16_t accel_x, accel_y, accel_z;
+    uint16_t gyro_x, gyro_y, gyro_z;
+    float temperature;
+    cJSON *root, *acceleration, *gyro, *temp;
+    char *json_data;
+
+    while (1)
+    {
+        if (mpu_read_accel(&accel_x, &accel_y, &accel_z) == ESP_OK && mpu_read_gyro(&gyro_x, &gyro_y, &gyro_z) == ESP_OK && mpu_read_temperature(&temperature) == ESP_OK)
+        {
+            // Kalman filter for accelerometer data
+            float filtered_accel_x = convertAccel(kalmanFilterUpdate(&kalmanFilterAccelX, accel_x));
+            float filtered_accel_y = convertAccel(kalmanFilterUpdate(&kalmanFilterAccelY, accel_y));
+            float filtered_accel_z = convertAccel(kalmanFilterUpdate(&kalmanFilterAccelZ, accel_z));
+
+            // Kalman filter for gyroscope data
+            float filtered_gyro_x = convertGyro(kalmanFilterUpdate(&kalmanFilterGyroX, gyro_x));
+            float filtered_gyro_y = convertGyro(kalmanFilterUpdate(&kalmanFilterGyroY, gyro_y));
+            float filtered_gyro_z = convertGyro(kalmanFilterUpdate(&kalmanFilterGyroZ, gyro_z));
+
+            root = cJSON_CreateObject();
+            cJSON_AddItemToObject(root, "acceleration", acceleration = cJSON_CreateObject());
+            cJSON_AddNumberToObject(acceleration, "x", filtered_accel_x);
+            cJSON_AddNumberToObject(acceleration, "y", filtered_accel_y);
+            cJSON_AddNumberToObject(acceleration, "z", filtered_accel_z);
+            cJSON_AddItemToObject(root, "gyro", gyro = cJSON_CreateObject());
+            cJSON_AddNumberToObject(gyro, "x", filtered_gyro_x);
+            cJSON_AddNumberToObject(gyro, "y", filtered_gyro_y);
+            cJSON_AddNumberToObject(gyro, "z", filtered_gyro_z);
+            cJSON_AddItemToObject(root, "temperature", temp = cJSON_CreateObject());
+            cJSON_AddNumberToObject(temp, "TEMP", temperature);
+            json_data = cJSON_Print(root);
+            cJSON_Delete(root);
+
+            ESP_LOGI(TAG1, "JSON data: %s", json_data);
+            free(json_data);
+        }
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
+    }
 }
