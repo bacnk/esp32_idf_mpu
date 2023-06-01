@@ -51,9 +51,27 @@ static const char *TAG1 = "HTTP_POST";
 #define who_am_i 0x75
 #define ESP_CONFIG_TCP_SERVER CONFIG_SERVER_IP
 #define ESP_CONFIG_TCP_PORT CONFIG_SERVER_PORT
-static int tcp_socket = -1;
 static uint8_t buffer[14];
-uint16_t accel_x; uint16_t accel_y; uint16_t accel_z; uint16_t gyro_x; uint16_t gyro_y; uint16_t gyro_z; float temperature;
+typedef struct
+{
+    float acceleration_x;
+    float acceleration_y;
+    float acceleration_z;
+    float gyro_x;
+    float gyro_y;
+    float gyro_z;
+    float temperature;
+} SensorData;
+
+TaskHandle_t sensorTaskHandle;
+TaskHandle_t sendDataTaskHandle;
+
+// Queue handle
+QueueHandle_t sensorDataQueue;
+
+// Define task priorities
+#define SENSOR_TASK_PRIORITY 2
+#define SEND_DATA_TASK_PRIORITY 1
 static KalmanFilter_t kalmanFilterAccelX;
 static KalmanFilter_t kalmanFilterAccelY;
 static KalmanFilter_t kalmanFilterAccelZ;
@@ -227,98 +245,124 @@ float convertGyro(int16_t gyroValue)
 
     return gyro;
 }
-void send_data_to_nodejs(uint16_t accel_x, uint16_t accel_y, uint16_t accel_z, uint16_t gyro_x, uint16_t gyro_y, uint16_t gyro_z, float temperature)
+void sensorTask(void *pvParameters)
 {
+    uint16_t accel_x, accel_y, accel_z;
+    uint16_t gyro_x, gyro_y, gyro_z;
+    float temperature;
+    while (1)
+    {
+        if (mpu_read_accel(&accel_x, &accel_y, &accel_z) == ESP_OK &&
+            mpu_read_gyro(&gyro_x, &gyro_y, &gyro_z) == ESP_OK &&
+            mpu_read_temperature(&temperature) == ESP_OK)
+        {
+            // Kalman filter for accelerometer data
+            float filtered_accel_x = convertAccel(kalmanFilterUpdate(&kalmanFilterAccelX, accel_x));
+            float filtered_accel_y = convertAccel(kalmanFilterUpdate(&kalmanFilterAccelY, accel_y));
+            float filtered_accel_z = convertAccel(kalmanFilterUpdate(&kalmanFilterAccelZ, accel_z));
 
+            // Kalman filter for gyroscope data
+            float filtered_gyro_x = convertGyro(kalmanFilterUpdate(&kalmanFilterGyroX, gyro_x));
+            float filtered_gyro_y = convertGyro(kalmanFilterUpdate(&kalmanFilterGyroY, gyro_y));
+            float filtered_gyro_z = convertGyro(kalmanFilterUpdate(&kalmanFilterGyroZ, gyro_z));
+
+            // Create sensor data struct
+            SensorData data;
+            data.acceleration_x = filtered_accel_x;
+            data.acceleration_y = filtered_accel_y;
+            data.acceleration_z = filtered_accel_z;
+            data.gyro_x = filtered_gyro_x;
+            data.gyro_y = filtered_gyro_y;
+            data.gyro_z = filtered_gyro_z;
+            data.temperature = temperature;
+
+            // Send sensor data to the queue
+            xQueueSend(sensorDataQueue, &data, 0);
+        }
+
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
+    }
+}
+void performDataTransmission(const char *data)
+{
+    int sockfd;
+    struct sockaddr_in server_addr;
+
+    // Create a socket
+    sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0)
+    {
+        perror("Error creating socket");
+        return;
+    }
+
+    // Configure server address
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = inet_addr(CONFIG_SERVER_IP);
+    server_addr.sin_port = htons(CONFIG_SERVER_PORT);
+
+    // Connect to the server
+    if (connect(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
+    {
+        perror("Error connecting to server");
+        close(sockfd);
+        return;
+    }
+
+    // Send data to the server
+    if (send(sockfd, data, strlen(data), 0) < 0)
+    {
+        perror("Error sending data");
+        close(sockfd);
+        return;
+    }
+
+    printf("Data sent: %s\n", data);
+
+    // Close the socket
+    close(sockfd);
+}
+void sendDataServer(void *pvParameters)
+{
     cJSON *root, *acceleration, *gyro, *temp;
     char *json_data;
-    mpu_read_accel(&accel_x, &accel_y, &accel_z);
-    mpu_read_gyro(&gyro_x, &gyro_y, &gyro_z);
-    mpu_read_temperature(&temperature);
-
-    float filtered_accel_x = convertAccel(kalmanFilterUpdate(&kalmanFilterAccelX, accel_x));
-    float filtered_accel_y = convertAccel(kalmanFilterUpdate(&kalmanFilterAccelY, accel_y));
-    float filtered_accel_z = convertAccel(kalmanFilterUpdate(&kalmanFilterAccelZ, accel_z));
-
-    // Kalman filter for gyroscope data
-    float filtered_gyro_x = convertGyro(kalmanFilterUpdate(&kalmanFilterGyroX, gyro_x));
-    float filtered_gyro_y = convertGyro(kalmanFilterUpdate(&kalmanFilterGyroY, gyro_y));
-    float filtered_gyro_z = convertGyro(kalmanFilterUpdate(&kalmanFilterGyroZ, gyro_z));
-
-    root = cJSON_CreateObject();
-    cJSON_AddItemToObject(root, "acceleration", acceleration = cJSON_CreateObject());
-    cJSON_AddNumberToObject(acceleration, "x", filtered_accel_x);
-    cJSON_AddNumberToObject(acceleration, "y", filtered_accel_y);
-    cJSON_AddNumberToObject(acceleration, "z", filtered_accel_z);
-    cJSON_AddItemToObject(root, "gyro", gyro = cJSON_CreateObject());
-    cJSON_AddNumberToObject(gyro, "x", filtered_gyro_x);
-    cJSON_AddNumberToObject(gyro, "y", filtered_gyro_y);
-    cJSON_AddNumberToObject(gyro, "z", filtered_gyro_z);
-    cJSON_AddItemToObject(root, "temperature", temp = cJSON_CreateObject());
-    cJSON_AddNumberToObject(temp, "TEMP", temperature);
-    json_data = cJSON_Print(root);
-
-    int sockfd;
-    struct sockaddr_in dest_addr;
-    struct hostent *he;
-    int numbytes;
-    // Create socket
-    if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) == -1)
+    while (1)
     {
-        perror("socket");
-        return;
+        // Receive sensor data from the queue
+        SensorData data;
+        if (xQueueReceive(sensorDataQueue, &data, portMAX_DELAY) == pdTRUE)
+        {
+            root = cJSON_CreateObject();
+            cJSON_AddItemToObject(root, "acceleration", acceleration = cJSON_CreateObject());
+            cJSON_AddNumberToObject(acceleration, "x", data.acceleration_x);
+            cJSON_AddNumberToObject(acceleration, "y", data.acceleration_y);
+            cJSON_AddNumberToObject(acceleration, "z", data.acceleration_z);
+            cJSON_AddItemToObject(root, "gyro", gyro = cJSON_CreateObject());
+            cJSON_AddNumberToObject(gyro, "x", data.gyro_x);
+            cJSON_AddNumberToObject(gyro, "y", data.gyro_y);
+            cJSON_AddNumberToObject(gyro, "z", data.gyro_z);
+            cJSON_AddItemToObject(root, "temperature", temp = cJSON_CreateObject());
+            cJSON_AddNumberToObject(temp, "TEMP", data.temperature);
+            json_data = cJSON_Print(root);
+            cJSON_Delete(root);
+
+            // Perform data transmission (replace with your own implementation)
+            performDataTransmission(json_data);
+
+            // Free allocated memory
+            free(json_data);
+        }
     }
-
-    // Set server information
-    dest_addr.sin_family = AF_INET;
-    dest_addr.sin_port = htons(CONFIG_SERVER_PORT); // Change to the appropriate port number
-    he = gethostbyname(CONFIG_SERVER_IP);           // Change to the server hostname or IP address
-    dest_addr.sin_addr.s_addr = *((unsigned long *)he->h_addr);
-    memset(&(dest_addr.sin_zero), '\0', 8);
-
-    // Connect to server
-    if (connect(sockfd, (struct sockaddr *)&dest_addr, sizeof(struct sockaddr)) == -1)
-    {
-        perror("connect");
-        return;
-    }
-
-    // Send data
-    if ((numbytes = send(sockfd, json_data, strlen(json_data), 0)) == -1)
-    {
-        perror("send");
-        return;
-    }
-
-    // Close socket
-    close(sockfd);
-
-    cJSON_Delete(root);
-    ESP_LOGI(TAG1, "JSON data: %s", json_data);
-    free(json_data);
 }
-static void i2c_task(void *arg)
+void app_main()
 {
+    ESP_ERROR_CHECK(nvs_flash_init());
+    connect_wifi();
     if (init_mpu6050() != ESP_OK)
     {
         ESP_LOGE(TAG, "Failed to initialize MPU6050");
         return;
     }
-    send_data_to_nodejs(accel_x, accel_y, accel_z, gyro_x, gyro_y, gyro_z, temperature);
-        vTaskDelete(NULL);
-}
-
-void app_main()
-{
-    esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
-    {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ret = nvs_flash_init();
-    }
-    connect_wifi();
-    ESP_ERROR_CHECK(ret);
-    ESP_ERROR_CHECK(i2c_master_init());
-    ESP_ERROR_CHECK(mpu_wake());
-    xTaskCreate(i2c_task, "i2c_task", 1024 * 2, NULL, 10, NULL);
+    
 }
