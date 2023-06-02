@@ -18,3 +18,16 @@ menu "Example Configuration"
         help
             Set the Maximum retry to avoid station reconnecting to the AP unlimited when the AP is really inexistent.
 endmenu
+menu "CONFIG TCP SERVER"
+    config SERVER_IP
+    string "Server IP"
+    default "192.168.1.100"
+    help
+        Enter the IP address of the server.
+
+config SERVER_PORT
+    int "Server Port"
+    default 1234
+    help
+        Enter the port number of the server.
+endmenu
