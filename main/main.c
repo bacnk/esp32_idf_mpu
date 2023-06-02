@@ -364,5 +364,15 @@ void app_main()
         ESP_LOGE(TAG, "Failed to initialize MPU6050");
         return;
     }
+      sensorDataQueue = xQueueCreate(10, sizeof(SensorData));
+
+    // Create sensor task
+    xTaskCreatePinnedToCore(sensorTask, "Sensor Task", configMINIMAL_STACK_SIZE * 3, NULL, SENSOR_TASK_PRIORITY, &sensorTaskHandle, 1);
+
+    // Create send data task
+    xTaskCreatePinnedToCore(sendDataServer, "Send Data Task", configMINIMAL_STACK_SIZE * 3, NULL, SEND_DATA_TASK_PRIORITY, &sendDataTaskHandle, 1);
+
+    // Start FreeRTOS scheduler
+    vTaskStartScheduler();
     
 }
